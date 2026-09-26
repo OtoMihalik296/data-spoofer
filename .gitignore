@@ -4,6 +4,12 @@ spoofed/
 *.mp4
 *.mov
 *.m4v
+*.jpg
+*.jpeg
+*.heic
+*.png
+*.webp
+*.dng
 __pycache__/
 *.pyc
 .venv/

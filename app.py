@@ -20,7 +20,8 @@ from flask import (
 
 from presets import LOCATIONS, PHONES, list_locations, list_phones
 from geocode import reverse_geocode
-from spoof import VIDEO_EXTS, parse_when, read_metadata, spoof_file
+from cameras import camera_defaults, get_camera
+from spoof import MEDIA_EXTS, IMAGE_EXTS, parse_when, read_metadata, spoof_file
 
 ROOT = Path(__file__).resolve().parent
 WORK = ROOT / ".work"
@@ -43,20 +44,50 @@ def _session_id() -> str:
     return session["sid"]
 
 
-def _apple_video_filename() -> str:
-    """iPhone Camera Roll style: IMG_4521.MOV"""
+def _apple_filename(suffix: str) -> str:
+    """iPhone Camera Roll style: IMG_4521.MOV / IMG_4521.HEIC / IMG_4521.JPG"""
     import random as _rnd
 
-    return f"IMG_{_rnd.randint(1, 9999):04d}.MOV"
+    ext = suffix.lower()
+    if ext in {".jpg", ".jpeg"}:
+        out = ".JPG"
+    elif ext in {".heic", ".heif"}:
+        out = ".HEIC"
+    elif ext == ".png":
+        out = ".PNG"
+    elif ext in {".tif", ".tiff"}:
+        out = ".TIFF"
+    elif ext == ".dng":
+        out = ".DNG"
+    elif ext == ".webp":
+        out = ".WEBP"
+    elif ext == ".mov":
+        out = ".MOV"
+    elif ext == ".m4v":
+        out = ".M4V"
+    else:
+        # mp4 and other video containers stay uppercase-ish Apple-like
+        out = ext.upper() if ext else ".MOV"
+    return f"IMG_{_rnd.randint(1, 9999):04d}{out}"
 
 
 def _download_mimetype(name: str) -> str:
     ext = Path(name).suffix.lower()
-    if ext == ".mov":
-        return "video/quicktime"
-    if ext == ".m4v":
-        return "video/x-m4v"
-    return "video/mp4"
+    return {
+        ".mov": "video/quicktime",
+        ".m4v": "video/x-m4v",
+        ".mp4": "video/mp4",
+        ".3gp": "video/3gpp",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".heic": "image/heic",
+        ".heif": "image/heif",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+        ".dng": "image/x-adobe-dng",
+    }.get(ext, "application/octet-stream")
 
 
 def _cleanup_old(max_age_sec: int = 3600) -> None:
@@ -89,16 +120,20 @@ def index():
 
 @app.get("/api/presets")
 def api_presets():
-    phones = [
-        {
-            "id": key,
-            "label": label,
-            "make": PHONES[key]["make"],
-            "model": PHONES[key]["model"],
-            "software": PHONES[key]["software"],
-        }
-        for key, label in list_phones()
-    ]
+    phones = []
+    for key, label in list_phones():
+        phone = PHONES[key]
+        cam = camera_defaults(key, phone)
+        phones.append(
+            {
+                "id": key,
+                "label": label,
+                "make": phone["make"],
+                "model": phone["model"],
+                "software": phone["software"],
+                "camera": cam,
+            }
+        )
     locations = [
         {
             "id": key,
@@ -113,6 +148,16 @@ def api_presets():
         for key, label in list_locations()
     ]
     return jsonify({"phones": phones, "locations": locations})
+
+
+@app.get("/api/camera/<phone_id>")
+def api_camera(phone_id: str):
+    if phone_id not in PHONES:
+        return jsonify({"error": f"Neznámy telefón: {phone_id}"}), 404
+    sample = request.args.get("sample") in {"1", "true", "yes"}
+    phone = PHONES[phone_id]
+    cam = get_camera(phone_id, phone, randomize=sample)
+    return jsonify(cam)
 
 
 @app.get("/api/reverse")
@@ -134,22 +179,24 @@ def api_reverse():
 def api_spoof():
     _cleanup_old()
 
-    if "video" not in request.files:
-        return jsonify({"error": "Chýba video súbor."}), 400
+    if "file" not in request.files and "video" not in request.files:
+        return jsonify({"error": "Chýba súbor (foto alebo video)."}), 400
 
-    file = request.files["video"]
+    file = request.files.get("file") or request.files.get("video")
     if not file or not file.filename:
-        return jsonify({"error": "Vyber video súbor."}), 400
+        return jsonify({"error": "Vyber foto alebo video."}), 400
 
     original_name = Path(file.filename).name
     suffix = Path(original_name).suffix.lower()
-    if suffix not in VIDEO_EXTS:
+    if suffix not in MEDIA_EXTS:
         return jsonify(
             {
                 "error": f"Nepodporovaný formát {suffix or '(bez prípony)'}. "
-                f"Použi: {', '.join(sorted(VIDEO_EXTS))}"
+                f"Použi: {', '.join(sorted(MEDIA_EXTS))}"
             }
         ), 400
+
+    kind = "image" if suffix in IMAGE_EXTS else "video"
 
     phone = (request.form.get("phone") or "").strip()
     location = (request.form.get("location") or "").strip() or None
@@ -189,6 +236,20 @@ def api_spoof():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    camera_override = None
+    cam_fields = {
+        "focal_mm": request.form.get("focal_mm"),
+        "fnumber": request.form.get("fnumber"),
+        "focal_35": request.form.get("focal_35"),
+        "iso": request.form.get("iso"),
+        "exposure_num": request.form.get("exposure_num"),
+        "exposure_den": request.form.get("exposure_den"),
+        "lens_make": request.form.get("lens_make"),
+        "lens_model": request.form.get("lens_model"),
+    }
+    if any(v is not None and str(v).strip() != "" for v in cam_fields.values()):
+        camera_override = cam_fields
+
     location_override = None
     if not no_gps and lat is not None and lon is not None:
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
@@ -226,6 +287,7 @@ def api_spoof():
             quiet=True,
             location_override=None if no_gps else location_override,
             wipe=wipe,
+            camera_override=camera_override,
         )
         meta = read_metadata(target)
     except Exception as exc:  # noqa: BLE001
@@ -248,7 +310,7 @@ def api_spoof():
     else:
         loc_name = "(bez GPS)"
 
-    download_name = _apple_video_filename()
+    download_name = _apple_filename(suffix)
     # Rename on disk so the file itself looks like Camera Roll output
     apple_path = target.with_name(download_name)
     if apple_path != target:
@@ -274,6 +336,7 @@ def api_spoof():
                 "when": when.strftime("%Y-%m-%d %H:%M:%S"),
                 "original": original_name,
                 "filename": download_name,
+                "kind": kind,
                 "wipe": wipe,
             },
             "metadata": meta,

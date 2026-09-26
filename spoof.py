@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import shutil
 import subprocess
@@ -19,8 +20,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from presets import LOCATIONS, PHONES, list_locations, list_phones
+from cameras import get_camera
 
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".3gp", ".3g2"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp", ".tif", ".tiff", ".dng"}
+MEDIA_EXTS = VIDEO_EXTS | IMAGE_EXTS
+
+
+def is_image(path: Path) -> bool:
+    return path.suffix.lower() in IMAGE_EXTS
+
+
+def is_video(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_EXTS
 
 
 def require_exiftool() -> str:
@@ -117,56 +129,138 @@ def build_tags(
     when: datetime,
     *,
     no_gps: bool = False,
+    media: str = "video",
+    phone_key: str | None = None,
+    camera_override: dict | None = None,
 ) -> list[str]:
     stamp = when.strftime("%Y:%m:%d %H:%M:%S")
     offset_hours = tz_offset_hours(location)
     tz = f"{offset_hours:+03d}:00"
     apple_stamp = when.strftime("%Y-%m-%dT%H:%M:%S") + tz
+    exif_offset = f"{offset_hours:+03d}00"
 
     make = phone["make"]
     model = phone["model"]
     software = phone["software"]
     is_apple = make.lower() == "apple"
+    photo = media == "image"
+    cam = get_camera(
+        phone_key or "",
+        phone,
+        randomize=not bool(camera_override),
+        overrides=camera_override,
+    )
 
     tags = [
         f"-CreateDate={stamp}",
         f"-ModifyDate={stamp}",
-        f"-TrackCreateDate={stamp}",
-        f"-TrackModifyDate={stamp}",
-        f"-MediaCreateDate={stamp}",
-        f"-MediaModifyDate={stamp}",
         f"-Make={make}",
         f"-Model={model}",
         f"-Software={software}",
-        f"-HandlerDescription=Core Media Video",
+        # Filesystem timestamps (macOS/Windows via ExifTool)
+        f"-FileModifyDate={stamp}",
+        f"-FileCreateDate={stamp}",
     ]
 
-    if is_apple:
+    if photo:
+        exp = f"{cam['exposure_num']}/{cam['exposure_den']}"
         tags.extend(
             [
-                f"-Keys:Make={make}",
-                f"-Keys:Model={model}",
-                f"-Keys:Software={software}",
-                f"-Keys:CreationDate={apple_stamp}",
-                f"-QuickTime:CreateDate={stamp}",
-                f"-QuickTime:ModifyDate={stamp}",
+                f"-DateTimeOriginal={stamp}",
+                f"-OffsetTimeOriginal={exif_offset}",
+                f"-OffsetTime={exif_offset}",
+                f"-OffsetTimeDigitized={exif_offset}",
+                f"-SubSecTimeOriginal={random.randint(0, 999):03d}",
+                f"-SubSecTimeDigitized={random.randint(0, 999):03d}",
+                f"-FocalLength={cam['focal_mm']}",
+                f"-FNumber={cam['fnumber']}",
+                f"-ApertureValue={cam['fnumber']}",
+                f"-FocalLengthIn35mmFormat={cam['focal_35']}",
+                f"-ExposureTime={exp}",
+                f"-ShutterSpeedValue={exp}",
+                f"-ISO={cam['iso']}",
+                f"-PhotographicSensitivity={cam['iso']}",
+                "-ExposureProgram=2",  # Normal program
+                "-MeteringMode=5",  # Pattern / multi-segment
+                "-Flash=0",
+                "-WhiteBalance=0",  # Auto
+                "-SceneCaptureType=0",  # Standard
+                "-ColorSpace=1",  # sRGB
+                "-ExifVersion=0232",
+                "-ComponentsConfiguration=1 2 3 0",
+                f"-ImageUniqueID={random.randbytes(16).hex()}",
             ]
         )
-        if phone.get("lens"):
-            tags.append(f"-Keys:LensModel={phone['lens']}")
+        if cam.get("lens_model"):
+            tags.append(f"-LensModel={cam['lens_model']}")
+        if cam.get("lens_make"):
+            tags.append(f"-LensMake={cam['lens_make']}")
+
+        if is_apple:
+            tags.extend(
+                [
+                    f"-HostComputer={model}",
+                    f"-Exif:Make={make}",
+                    f"-Exif:Model={model}",
+                    f"-XMP:CreateDate={stamp}",
+                    f"-XMP:ModifyDate={stamp}",
+                    f"-XMP:DateCreated={stamp}",
+                    "-XMP:CreatorTool=Camera",
+                ]
+            )
+        else:
+            vendor = phone.get("vendor") or make
+            tags.extend(
+                [
+                    f"-Exif:Make={make}",
+                    f"-Exif:Model={model}",
+                    f"-XMP:Make={make}",
+                    f"-XMP:Model={model}",
+                    f"-XMP:CreatorTool={vendor} Camera",
+                ]
+            )
     else:
         tags.extend(
             [
-                f"-AndroidMake={make}",
-                f"-AndroidModel={model}",
-                f"-CompressorName={make} {model}",
+                f"-TrackCreateDate={stamp}",
+                f"-TrackModifyDate={stamp}",
+                f"-MediaCreateDate={stamp}",
+                f"-MediaModifyDate={stamp}",
+                f"-ContentCreateDate={stamp}",
+                f"-HandlerDescription=Core Media Video",
             ]
         )
+        if is_apple:
+            tags.extend(
+                [
+                    f"-Keys:Make={make}",
+                    f"-Keys:Model={model}",
+                    f"-Keys:Software={software}",
+                    f"-Keys:CreationDate={apple_stamp}",
+                    f"-QuickTime:CreateDate={stamp}",
+                    f"-QuickTime:ModifyDate={stamp}",
+                    "-HandlerVendorID=Apple",
+                    "-CompressorID=avc1",
+                    "-CompressorName=H.264",
+                    "-Encoder=Apple",
+                ]
+            )
+            if phone.get("lens"):
+                tags.append(f"-Keys:LensModel={phone['lens']}")
+        else:
+            vendor = phone.get("vendor") or make
+            tags.extend(
+                [
+                    f"-AndroidMake={make}",
+                    f"-AndroidModel={model}",
+                    f"-CompressorName={make} {model}",
+                    f"-Encoder={vendor}",
+                ]
+            )
 
     if location and not no_gps:
         lat = float(location["lat"])
         lon = float(location["lon"])
-        # Exact map pin stays exact; city presets get slight jitter
         if not location.get("exact"):
             lat, lon = jitter_coords(lat, lon)
         alt = float(location.get("alt", 0.0))
@@ -184,8 +278,9 @@ def build_tags(
                 f"-GPSLongitudeRef={'E' if lon >= 0 else 'W'}",
                 f"-GPSAltitude={abs(alt)}",
                 f"-GPSAltitudeRef={'above' if alt >= 0 else 'below'}",
-                f"-Keys:GPSCoordinates={loc_str}",
-                f"-UserData:GPSCoordinates={loc_str}",
+                f"-GPSDateStamp={when.strftime('%Y:%m:%d')}",
+                f"-GPSTimeStamp={when.strftime('%H:%M:%S')}",
+                "-GPSProcessingMethod=GPS",
                 f"-Location={city}",
                 f"-LocationName={city}, {country}",
                 f"-Country={country}",
@@ -193,22 +288,31 @@ def build_tags(
         )
         if country_code:
             tags.append(f"-CountryCode={country_code}")
-        if is_apple:
-            tags.append(f"-Keys:LocationISO6709={loc_str}")
+        if not photo:
+            tags.extend(
+                [
+                    f"-Keys:GPSCoordinates={loc_str}",
+                    f"-UserData:GPSCoordinates={loc_str}",
+                ]
+            )
+            if is_apple:
+                tags.append(f"-Keys:LocationISO6709={loc_str}")
 
     return tags
 
 
 def strip_all_metadata(path: Path) -> None:
     """Wipe existing container/tag metadata before writing a clean fingerprint."""
-    # ExifTool: remove all writable tags
     run_exiftool(["-all=", str(path)], check=False)
+
+    # ffmpeg remux helps videos; skip for photos
+    if is_image(path):
+        return
 
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return
 
-    # Remux without metadata streams / global headers (no re-encode)
     tmp = path.with_suffix(path.suffix + ".clean.tmp" + path.suffix)
     cmd = [
         ffmpeg,
@@ -234,11 +338,29 @@ INSPECT_TAGS = [
     "Software",
     "CreateDate",
     "ModifyDate",
+    "DateTimeOriginal",
+    "OffsetTimeOriginal",
+    "FocalLength",
+    "FNumber",
+    "ExposureTime",
+    "ISO",
+    "FocalLengthIn35mmFormat",
+    "LensMake",
+    "LensModel",
+    "HostComputer",
+    "ImageUniqueID",
+    "FileModifyDate",
+    "FileCreateDate",
     "TrackCreateDate",
     "MediaCreateDate",
+    "CompressorID",
+    "Encoder",
+    "HandlerVendorID",
     "GPSLatitude",
     "GPSLongitude",
     "GPSAltitude",
+    "GPSDateStamp",
+    "GPSTimeStamp",
     "Keys:Make",
     "Keys:Model",
     "Keys:Software",
@@ -289,11 +411,13 @@ def spoof_file(
     quiet: bool = False,
     location_override: dict | None = None,
     wipe: bool = True,
+    camera_override: dict | None = None,
 ) -> Path:
-    if path.suffix.lower() not in VIDEO_EXTS:
+    suffix = path.suffix.lower()
+    if suffix not in MEDIA_EXTS:
         raise ValueError(
             f"Nepodporovaný formát: {path.suffix} "
-            f"(podporované: {', '.join(sorted(VIDEO_EXTS))})"
+            f"(podporované: {', '.join(sorted(MEDIA_EXTS))})"
         )
     if phone_key not in PHONES:
         raise ValueError(f"Neznámy telefón: {phone_key}")
@@ -308,20 +432,37 @@ def spoof_file(
     else:
         location = None
 
+    media = "image" if is_image(path) else "video"
+
     if inplace:
         target = path
     else:
         dest_dir = out_dir or path.parent / "spoofed"
         dest_dir.mkdir(parents=True, exist_ok=True)
         stamp = when.strftime("%Y%m%d_%H%M%S")
-        target = dest_dir / f"{path.stem}_spoofed_{stamp}{path.suffix.lower()}"
+        target = dest_dir / f"{path.stem}_spoofed_{stamp}{suffix}"
         shutil.copy2(path, target)
 
     if wipe:
         strip_all_metadata(target)
 
-    tags = build_tags(phone, location, when, no_gps=no_gps)
-    run_exiftool([*tags, str(target)])
+    tags = build_tags(
+        phone,
+        location,
+        when,
+        no_gps=no_gps,
+        media=media,
+        phone_key=phone_key,
+        camera_override=camera_override,
+    )
+    run_exiftool([*tags, "-m", str(target)])
+
+    # Also sync OS timestamps (fallback if FileCreateDate unsupported)
+    try:
+        ts = when.timestamp()
+        os.utime(target, (ts, ts))
+    except OSError:
+        pass
 
     if not quiet:
         label = phone.get("display_name") or f"{phone['make']} {phone['model']}"
@@ -331,6 +472,7 @@ def spoof_file(
             where = location.get("name") or f"{location.get('lat')}, {location.get('lon')}"
         print(f"✓ {path.name}")
         print(f"  → {target}")
+        print(f"  typ     : {media}")
         print(f"  telefón : {label}")
         print(f"  miesto  : {where}")
         print(f"  čas     : {when.strftime('%Y-%m-%d %H:%M:%S')}")

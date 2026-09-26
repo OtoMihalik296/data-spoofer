@@ -14,15 +14,15 @@
   <div class="shell">
     <header class="brand">
       <h1 class="brand-mark">Data Spoofer</h1>
-      <p class="brand-line">Zmaž staré metadata a zapíš nové — telefón, čas, presné GPS z mapy.</p>
+      <p class="brand-line">Zmaž staré metadata a zapíš nové — fotky aj videá, telefón, čas, GPS z mapy.</p>
     </header>
 
     <main class="stage">
       <form id="spoof-form" class="panel" novalidate>
-        <label class="drop" id="dropzone" for="video">
-          <input type="file" id="video" name="video" accept=".mp4,.mov,.m4v,.3gp,video/mp4,video/quicktime" required />
-          <span class="drop-title" id="drop-title">Presuň video sem</span>
-          <span class="drop-hint">alebo klikni · MP4 / MOV · max 512&nbsp;MB</span>
+        <label class="drop" id="dropzone" for="media">
+          <input type="file" id="media" name="file" accept=".mp4,.mov,.m4v,.3gp,.jpg,.jpeg,.heic,.heif,.png,.webp,.tif,.tiff,.dng,video/*,image/*" required />
+          <span class="drop-title" id="drop-title">Presuň foto alebo video sem</span>
+          <span class="drop-hint">JPG / HEIC / PNG · MP4 / MOV · max 200&nbsp;MB</span>
         </label>
 
         <div class="grid">
@@ -83,6 +83,50 @@
           <input type="hidden" id="city" name="city" />
           <input type="hidden" id="country" name="country" />
           <input type="hidden" id="country_code" name="country_code" />
+        </section>
+
+        <section class="camera-block" id="camera-block">
+          <div class="map-head">
+            <div>
+              <h2 class="section-title">Kamera (editovateľné)</h2>
+              <p class="map-hint">Predvyplnené podľa telefónu — môžeš zmeniť. Platí hlavne pre fotky.</p>
+            </div>
+            <button type="button" class="btn ghost" id="resample-cam">Náhodné ISO/čas</button>
+          </div>
+          <div class="camera-grid">
+            <label class="field">
+              <span>Ohnisko (mm)</span>
+              <input type="number" id="focal_mm" name="focal_mm" step="0.01" />
+            </label>
+            <label class="field">
+              <span>Clona (f/)</span>
+              <input type="number" id="fnumber" name="fnumber" step="0.01" />
+            </label>
+            <label class="field">
+              <span>35mm equiv</span>
+              <input type="number" id="focal_35" name="focal_35" step="1" />
+            </label>
+            <label class="field">
+              <span>ISO</span>
+              <input type="number" id="iso" name="iso" step="1" min="25" />
+            </label>
+            <label class="field">
+              <span>Čas (1 / …)</span>
+              <div class="shutter-row">
+                <input type="number" id="exposure_num" name="exposure_num" step="1" min="1" value="1" />
+                <span class="shutter-sep">/</span>
+                <input type="number" id="exposure_den" name="exposure_den" step="1" min="1" />
+              </div>
+            </label>
+            <label class="field">
+              <span>Lens make</span>
+              <input type="text" id="lens_make" name="lens_make" />
+            </label>
+            <label class="field field-wide">
+              <span>Lens model</span>
+              <input type="text" id="lens_model" name="lens_model" />
+            </label>
+          </div>
         </section>
 
         <div class="actions">

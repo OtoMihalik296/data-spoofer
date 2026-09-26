@@ -1,6 +1,6 @@
 const form = document.getElementById("spoof-form");
 const dropzone = document.getElementById("dropzone");
-const videoInput = document.getElementById("video");
+const mediaInput = document.getElementById("media");
 const dropTitle = document.getElementById("drop-title");
 const phoneSelect = document.getElementById("phone");
 const locationSelect = document.getElementById("location");
@@ -22,8 +22,18 @@ const altInput = document.getElementById("alt");
 const cityInput = document.getElementById("city");
 const countryInput = document.getElementById("country");
 const countryCodeInput = document.getElementById("country_code");
+const resampleCamBtn = document.getElementById("resample-cam");
+const camFocalMm = document.getElementById("focal_mm");
+const camFnumber = document.getElementById("fnumber");
+const camFocal35 = document.getElementById("focal_35");
+const camIso = document.getElementById("iso");
+const camExpNum = document.getElementById("exposure_num");
+const camExpDen = document.getElementById("exposure_den");
+const camLensMake = document.getElementById("lens_make");
+const camLensModel = document.getElementById("lens_model");
 
 let locationsById = {};
+let phonesById = {};
 let map;
 let marker;
 let reverseTimer = null;
@@ -124,13 +134,40 @@ function initMap(defaultLoc) {
   setTimeout(() => map.invalidateSize(), 50);
 }
 
+function applyCamera(cam) {
+  if (!cam) return;
+  camFocalMm.value = cam.focal_mm ?? "";
+  camFnumber.value = cam.fnumber ?? "";
+  camFocal35.value = cam.focal_35 ?? "";
+  camIso.value = cam.iso ?? "";
+  camExpNum.value = cam.exposure_num ?? 1;
+  camExpDen.value = cam.exposure_den ?? "";
+  camLensMake.value = cam.lens_make ?? "";
+  camLensModel.value = cam.lens_model ?? "";
+}
+
+function fillCameraFromPhone() {
+  const phone = phonesById[phoneSelect.value];
+  if (phone?.camera) applyCamera(phone.camera);
+}
+
+async function sampleCamera() {
+  const id = phoneSelect.value;
+  if (!id) return;
+  const res = await fetch(`/api/camera/${encodeURIComponent(id)}?sample=1`);
+  if (!res.ok) throw new Error("Nepodarilo sa načítať kameru.");
+  applyCamera(await res.json());
+}
+
 async function loadPresets() {
   const res = await fetch("/api/presets");
   if (!res.ok) throw new Error("Nepodarilo sa načítať presety.");
   const data = await res.json();
   fillSelect(phoneSelect, data.phones, "Vyber telefón…");
   fillSelect(locationSelect, data.locations, "Preset mesta…");
+  phonesById = Object.fromEntries(data.phones.map((p) => [p.id, p]));
   phoneSelect.value = "iphone-15-pro";
+  fillCameraFromPhone();
 
   locationsById = Object.fromEntries(data.locations.map((l) => [l.id, l]));
   const def = locationsById["sk-bratislava"] || data.locations[0];
@@ -139,12 +176,12 @@ async function loadPresets() {
 }
 
 function updateFileLabel() {
-  const file = videoInput.files?.[0];
+  const file = mediaInput.files?.[0];
   if (file) {
     dropTitle.textContent = file.name;
     dropzone.classList.add("has-file");
   } else {
-    dropTitle.textContent = "Presuň video sem";
+    dropTitle.textContent = "Presuň foto alebo video sem";
     dropzone.classList.remove("has-file");
   }
 }
@@ -168,13 +205,17 @@ dropzone.addEventListener("drop", (e) => {
   if (!file) return;
   const dt = new DataTransfer();
   dt.items.add(file);
-  videoInput.files = dt.files;
+  mediaInput.files = dt.files;
   updateFileLabel();
 });
 
-videoInput.addEventListener("change", updateFileLabel);
+mediaInput.addEventListener("change", updateFileLabel);
 randomCheck.addEventListener("change", syncRandomUi);
 noGpsCheck.addEventListener("change", syncGpsUi);
+phoneSelect.addEventListener("change", fillCameraFromPhone);
+resampleCamBtn.addEventListener("click", () => {
+  sampleCamera().catch((err) => setStatus(err.message, "error"));
+});
 
 locationSelect.addEventListener("change", () => {
   const loc = locationsById[locationSelect.value];
@@ -198,8 +239,8 @@ form.addEventListener("submit", async (e) => {
   resultEl.hidden = true;
   setStatus("");
 
-  if (!videoInput.files?.length) {
-    setStatus("Najprv vyber video.", "error");
+  if (!mediaInput.files?.length) {
+    setStatus("Najprv vyber foto alebo video.", "error");
     return;
   }
   if (!randomCheck.checked && !phoneSelect.value) {
@@ -212,7 +253,7 @@ form.addEventListener("submit", async (e) => {
   }
 
   const fd = new FormData();
-  fd.append("video", videoInput.files[0]);
+  fd.append("file", mediaInput.files[0]);
   if (phoneSelect.value) fd.append("phone", phoneSelect.value);
   if (locationSelect.value) fd.append("location", locationSelect.value);
   if (whenInput.value) {
@@ -231,6 +272,16 @@ form.addEventListener("submit", async (e) => {
     fd.append("country_code", countryCodeInput.value || "");
   }
 
+  // Editable camera EXIF
+  fd.append("focal_mm", camFocalMm.value);
+  fd.append("fnumber", camFnumber.value);
+  fd.append("focal_35", camFocal35.value);
+  fd.append("iso", camIso.value);
+  fd.append("exposure_num", camExpNum.value || "1");
+  fd.append("exposure_den", camExpDen.value);
+  fd.append("lens_make", camLensMake.value);
+  fd.append("lens_model", camLensModel.value);
+
   submitBtn.disabled = true;
   setStatus(wipeCheck.checked ? "Mažem staré metadata a zapisujem nové…" : "Zapisujem metadata…");
 
@@ -240,8 +291,10 @@ form.addEventListener("submit", async (e) => {
     if (!res.ok) throw new Error(data.error || "Spoof zlyhal.");
 
     const s = data.summary;
+    const kindLabel = s.kind === "image" ? "foto" : "video";
     summaryEl.innerHTML = `
       <dt>súbor</dt><dd>${escapeHtml(s.original)} → <strong>${escapeHtml(s.filename || data.download_name || "—")}</strong></dd>
+      <dt>typ</dt><dd>${escapeHtml(kindLabel)}</dd>
       <dt>telefón</dt><dd>${escapeHtml(s.phone)}</dd>
       <dt>miesto</dt><dd>${escapeHtml(s.location)}</dd>
       <dt>mesto</dt><dd>${escapeHtml(s.city || "—")}</dd>
@@ -251,10 +304,10 @@ form.addEventListener("submit", async (e) => {
     `;
     metaEl.textContent = formatMeta(data.metadata);
     downloadBtn.href = data.download_url;
-    downloadBtn.setAttribute("download", data.download_name || "IMG_0001.MOV");
-    downloadBtn.textContent = `Stiahnuť ${data.download_name || "video"}`;
+    downloadBtn.setAttribute("download", data.download_name || "IMG_0001.JPG");
+    downloadBtn.textContent = `Stiahnuť ${data.download_name || "súbor"}`;
     resultEl.hidden = false;
-    setStatus("Hotovo — môžeš stiahnuť video.", "ok");
+    setStatus("Hotovo — môžeš stiahnuť súbor.", "ok");
   } catch (err) {
     setStatus(err.message || "Chyba", "error");
   } finally {
