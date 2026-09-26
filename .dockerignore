@@ -1,0 +1,11 @@
+.git
+.work
+spoofed
+__pycache__
+*.pyc
+.venv
+.env
+*.mp4
+*.mov
+.DS_Store
+README.md

@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: data-spoofer
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true

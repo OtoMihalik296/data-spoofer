@@ -1,0 +1,387 @@
+:root {
+  --ink: #0e0f0e;
+  --ink-soft: #1c1d1c;
+  --surface: #ffffff;
+  --page: #f3f2ef;
+  --line: #d8d6d1;
+  --accent: #0f5c45;
+  --danger: #b42318;
+  --ok: #0f5c45;
+  --radius: 12px;
+  --font: "Instrument Sans", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font);
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, #f7f6f3 0%, var(--page) 40%, #ebeae6 100%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  width: min(880px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: clamp(2rem, 5vh, 3.5rem) 0 3rem;
+}
+
+.brand {
+  margin-bottom: 1.5rem;
+}
+
+.brand-mark {
+  margin: 0;
+  font-size: clamp(2.2rem, 6vw, 3.25rem);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.brand-line {
+  margin: 0.7rem 0 0;
+  max-width: 36rem;
+  color: var(--ink-soft);
+  font-size: 1.05rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.stage {
+  display: grid;
+  gap: 1rem;
+}
+
+.panel,
+.result {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.panel {
+  padding: 1.25rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.drop {
+  position: relative;
+  display: grid;
+  place-items: center;
+  gap: 0.3rem;
+  min-height: 148px;
+  padding: 1.35rem;
+  border: 1.5px dashed #bdbbb5;
+  border-radius: 10px;
+  background: #fafaf8;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.drop:hover,
+.drop.dragover {
+  border-color: var(--ink);
+  background: #f4f4f1;
+}
+
+.drop.has-file {
+  border-style: solid;
+  border-color: var(--ink);
+}
+
+.drop input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.drop-title {
+  font-size: 1.12rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.drop-hint {
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.field span {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.field select,
+.field input[type="datetime-local"],
+.field input[type="number"] {
+  width: 100%;
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: 500 0.98rem/1.2 var(--font);
+  padding: 0.72rem 0.85rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.field select:focus,
+.field input:focus {
+  border-color: var(--ink);
+}
+
+.field select:disabled,
+.field input:disabled {
+  opacity: 0.45;
+}
+
+.toggles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.35rem;
+  align-items: center;
+}
+
+.map-block {
+  display: grid;
+  gap: 0.85rem;
+  transition: opacity 0.2s ease;
+}
+
+.map-block.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.map-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.map-hint {
+  margin: 0.25rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.place-label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--ink);
+  text-align: right;
+}
+
+.map {
+  height: min(340px, 52vh);
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  z-index: 1;
+}
+
+.coords {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.85rem;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--ink);
+}
+
+.check span {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem 1rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  font: 600 0.98rem/1 var(--font);
+  padding: 0.85rem 1.2rem;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.btn:hover {
+  opacity: 0.9;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.btn.primary {
+  background: var(--ink);
+  color: #fff;
+}
+
+.btn.secondary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.status {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  font-weight: 500;
+  min-height: 1.2em;
+}
+
+.status.error {
+  color: var(--danger);
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.result {
+  padding: 1.2rem 1.25rem 1.35rem;
+}
+
+.result-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.result-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 650;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.summary {
+  margin: 0 0 1.1rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.4rem 1rem;
+  font-size: 0.98rem;
+}
+
+.summary dt {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.summary dd {
+  margin: 0;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.meta-wrap h3 {
+  margin: 0 0 0.55rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.meta {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 0.9rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #111;
+  color: #ececec;
+  font: 400 0.8rem/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  .grid,
+  .coords {
+    grid-template-columns: 1fr;
+  }
+
+  .brand-mark {
+    font-size: clamp(2rem, 10vw, 2.6rem);
+  }
+
+  .drop {
+    min-height: 130px;
+  }
+
+  .map {
+    height: 260px;
+  }
+}

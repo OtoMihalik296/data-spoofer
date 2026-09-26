@@ -1,0 +1,9 @@
+.DS_Store
+spoofed/
+.work/
+*.mp4
+*.mov
+*.m4v
+__pycache__/
+*.pyc
+.venv/
