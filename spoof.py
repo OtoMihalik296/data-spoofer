@@ -55,6 +55,175 @@ def run_exiftool(args: list[str], check: bool = True) -> subprocess.CompletedPro
     return result
 
 
+def write_photo_exif(
+    path: Path,
+    phone: dict,
+    location: dict | None,
+    when: datetime,
+    *,
+    no_gps: bool,
+    phone_key: str | None,
+    camera_override: dict | None,
+) -> None:
+    """
+    Hardened JPEG/HEIC EXIF write: core tags first, then camera details.
+    Uses numeric (#) enums so PrintConv warnings don't skip fields.
+    """
+    stamp = when.strftime("%Y:%m:%d %H:%M:%S")
+    offset_hours = tz_offset_hours(location)
+    exif_offset = f"{offset_hours:+03d}00"
+    make = phone["make"]
+    model = phone["model"]
+    software = phone["software"]
+    cam = get_camera(
+        phone_key or "",
+        phone,
+        randomize=not bool(camera_override),
+        overrides=camera_override,
+    )
+    exp = f"{cam['exposure_num']}/{cam['exposure_den']}"
+
+    # Pass 1 — create EXIF APP1 with identity + time (must stick)
+    core = [
+        f"-EXIF:Make={make}",
+        f"-EXIF:Model={model}",
+        f"-EXIF:Software={software}",
+        f"-EXIF:DateTimeOriginal={stamp}",
+        f"-EXIF:CreateDate={stamp}",
+        f"-EXIF:ModifyDate={stamp}",
+        f"-IFD0:Make={make}",
+        f"-IFD0:Model={model}",
+        f"-IFD0:Software={software}",
+        f"-IFD0:ModifyDate={stamp}",
+        f"-XMP-xmp:CreateDate={stamp}",
+        f"-XMP-xmp:ModifyDate={stamp}",
+        f"-XMP-photoshop:DateCreated={stamp}",
+        f"-FileModifyDate={stamp}",
+        f"-FileCreateDate={stamp}",
+    ]
+    if make.lower() == "apple":
+        core.append(f"-EXIF:HostComputer={model}")
+
+    run_exiftool([*core, str(path)])
+
+    # Pass 2 — camera / exposure (numeric enums with #)
+    detail = [
+        f"-EXIF:OffsetTimeOriginal={exif_offset}",
+        f"-EXIF:OffsetTime={exif_offset}",
+        f"-EXIF:OffsetTimeDigitized={exif_offset}",
+        f"-EXIF:SubSecTimeOriginal={random.randint(0, 999):03d}",
+        f"-EXIF:SubSecTimeDigitized={random.randint(0, 999):03d}",
+        f"-EXIF:FocalLength={cam['focal_mm']}",
+        f"-EXIF:FNumber={cam['fnumber']}",
+        f"-EXIF:FocalLengthIn35mmFormat={cam['focal_35']}",
+        f"-EXIF:ExposureTime={exp}",
+        f"-EXIF:ISO={cam['iso']}",
+        f"-EXIF:PhotographicSensitivity={cam['iso']}",
+        "-EXIF:ExposureProgram#=2",
+        "-EXIF:MeteringMode#=5",
+        "-EXIF:Flash#=0",
+        "-EXIF:WhiteBalance#=0",
+        "-EXIF:SceneCaptureType#=0",
+        "-EXIF:ColorSpace#=1",
+        "-EXIF:ExifVersion=0232",
+    ]
+    if cam.get("lens_model"):
+        detail.append(f"-EXIF:LensModel={cam['lens_model']}")
+    if cam.get("lens_make"):
+        detail.append(f"-EXIF:LensMake={cam['lens_make']}")
+
+    if location and not no_gps:
+        lat = float(location["lat"])
+        lon = float(location["lon"])
+        if not location.get("exact"):
+            lat, lon = jitter_coords(lat, lon)
+        alt = float(location.get("alt", 0.0))
+        if not location.get("exact"):
+            alt += random.uniform(-5, 5)
+        city = location.get("city") or "Unknown"
+        country = location.get("country") or "Unknown"
+        country_code = location.get("country_code") or ""
+        detail.extend(
+            [
+                f"-GPS:GPSLatitude={abs(lat)}",
+                f"-GPS:GPSLongitude={abs(lon)}",
+                f"-GPS:GPSLatitudeRef={'N' if lat >= 0 else 'S'}",
+                f"-GPS:GPSLongitudeRef={'E' if lon >= 0 else 'W'}",
+                f"-GPS:GPSAltitude={abs(alt)}",
+                f"-GPS:GPSAltitudeRef#={0 if alt >= 0 else 1}",
+                f"-GPS:GPSDateStamp={when.strftime('%Y:%m:%d')}",
+                f"-GPS:GPSTimeStamp={when.strftime('%H:%M:%S')}",
+                "-GPS:GPSProcessingMethod=GPS",
+                f"-XMP-iptcCore:Location={city}",
+                f"-XMP-photoshop:Country={country}",
+            ]
+        )
+        if country_code:
+            detail.append(f"-XMP-iptcCore:CountryCode={country_code}")
+
+    run_exiftool([*detail, "-m", str(path)])
+
+    # Verify EXIF actually landed in the file
+    verify = run_exiftool(
+        ["-json", "-EXIF:Make", "-EXIF:Model", "-EXIF:DateTimeOriginal", str(path)],
+        check=False,
+    )
+    try:
+        data = json.loads(verify.stdout)[0]
+    except (json.JSONDecodeError, IndexError) as exc:
+        raise RuntimeError("Nepodarilo sa overiť zápis EXIF.") from exc
+    make_ok = data.get("Make") or data.get("EXIF:Make")
+    model_ok = data.get("Model") or data.get("EXIF:Model")
+    dto = data.get("DateTimeOriginal") or data.get("EXIF:DateTimeOriginal")
+    if not (make_ok and model_ok and dto):
+        raise RuntimeError(
+            "EXIF sa do fotky nezapisal (Make/Model/DateTimeOriginal chýbajú). "
+            "Skús JPG namiesto WEBP, alebo iný súbor."
+        )
+
+
+def strip_all_metadata(path: Path) -> None:
+    """Wipe existing container/tag metadata before writing a clean fingerprint."""
+    if is_image(path):
+        # Prefer stripping metadata groups without nuking the JPEG structure oddly
+        run_exiftool(
+            [
+                "-EXIF:all=",
+                "-XMP:all=",
+                "-IPTC:all=",
+                "-Photoshop:all=",
+                "-Comment=",
+                str(path),
+            ],
+            check=False,
+        )
+        return
+
+    run_exiftool(["-all=", str(path)], check=False)
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return
+
+    tmp = path.with_suffix(path.suffix + ".clean.tmp" + path.suffix)
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(path),
+        "-map_metadata",
+        "-1",
+        "-c",
+        "copy",
+        str(tmp),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0 and tmp.is_file():
+        tmp.replace(path)
+    else:
+        tmp.unlink(missing_ok=True)
+
+
 def iso6709(lat: float, lon: float, alt: float | None = None) -> str:
     """Apple QuickTime location string, e.g. +48.1486+17.1077+152.000/."""
     lat_s = f"{lat:+.4f}"
@@ -301,37 +470,6 @@ def build_tags(
     return tags
 
 
-def strip_all_metadata(path: Path) -> None:
-    """Wipe existing container/tag metadata before writing a clean fingerprint."""
-    run_exiftool(["-all=", str(path)], check=False)
-
-    # ffmpeg remux helps videos; skip for photos
-    if is_image(path):
-        return
-
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        return
-
-    tmp = path.with_suffix(path.suffix + ".clean.tmp" + path.suffix)
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(path),
-        "-map_metadata",
-        "-1",
-        "-c",
-        "copy",
-        str(tmp),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode == 0 and tmp.is_file():
-        tmp.replace(path)
-    else:
-        tmp.unlink(missing_ok=True)
-
-
 INSPECT_TAGS = [
     "Make",
     "Model",
@@ -446,16 +584,27 @@ def spoof_file(
     if wipe:
         strip_all_metadata(target)
 
-    tags = build_tags(
-        phone,
-        location,
-        when,
-        no_gps=no_gps,
-        media=media,
-        phone_key=phone_key,
-        camera_override=camera_override,
-    )
-    run_exiftool([*tags, "-m", str(target)])
+    if media == "image":
+        write_photo_exif(
+            target,
+            phone,
+            location,
+            when,
+            no_gps=no_gps,
+            phone_key=phone_key,
+            camera_override=camera_override,
+        )
+    else:
+        tags = build_tags(
+            phone,
+            location,
+            when,
+            no_gps=no_gps,
+            media=media,
+            phone_key=phone_key,
+            camera_override=camera_override,
+        )
+        run_exiftool([*tags, "-m", str(target)])
 
     # Also sync OS timestamps (fallback if FileCreateDate unsupported)
     try:
