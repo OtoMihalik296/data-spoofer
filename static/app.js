@@ -73,6 +73,8 @@ function lookupPlace(lat, lon) {
   clearTimeout(reverseTimer);
   reverseTimer = setTimeout(async () => {
     placeLabel.textContent = "Hľadám miesto…";
+    // Pin moved → don't keep stale "Rýchla lokalita" city
+    if (locationSelect) locationSelect.value = "";
     try {
       const url = `/api/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
       const res = await fetch(url);
@@ -81,12 +83,19 @@ function lookupPlace(lat, lon) {
       const city = data.city && data.city !== "Unknown" ? data.city : "";
       const country = data.country && data.country !== "Unknown" ? data.country : "";
       if (!city || !country) throw new Error("empty place");
+      // Reject raw-coordinate fake cities like "43.6850"
+      if (/^-?\d+(\.\d+)?$/.test(city) || /^-?\d+(\.\d+)?$/.test(country)) {
+        throw new Error("coord fallback");
+      }
       cityInput.value = city;
       countryInput.value = country;
       countryCodeInput.value = data.country_code || "";
       placeLabel.textContent = `${city}, ${country}`;
     } catch {
       placeLabel.textContent = `${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}`;
+      cityInput.value = "";
+      countryInput.value = "";
+      countryCodeInput.value = "";
     }
   }, 280);
 }
