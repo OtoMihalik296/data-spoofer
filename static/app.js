@@ -16,6 +16,7 @@ const metaEl = document.getElementById("meta");
 const downloadBtn = document.getElementById("download-btn");
 const mapBlock = document.getElementById("map-block");
 const placeLabel = document.getElementById("place-label");
+const fileListEl = document.getElementById("file-list");
 const latInput = document.getElementById("lat");
 const lonInput = document.getElementById("lon");
 const altInput = document.getElementById("alt");
@@ -176,13 +177,24 @@ async function loadPresets() {
 }
 
 function updateFileLabel() {
-  const file = mediaInput.files?.[0];
-  if (file) {
-    dropTitle.textContent = file.name;
+  const files = [...(mediaInput.files || [])];
+  if (files.length === 1) {
+    dropTitle.textContent = files[0].name;
     dropzone.classList.add("has-file");
+    fileListEl.hidden = true;
+    fileListEl.innerHTML = "";
+  } else if (files.length > 1) {
+    dropTitle.textContent = `${files.length} súborov vybraných`;
+    dropzone.classList.add("has-file");
+    fileListEl.hidden = false;
+    fileListEl.innerHTML = files
+      .map((f) => `<li>${escapeHtml(f.name)} <span style="opacity:.6">(${Math.round(f.size / 1024)} KB)</span></li>`)
+      .join("");
   } else {
-    dropTitle.textContent = "Presuň foto alebo video sem";
+    dropTitle.textContent = "Presuň fotky alebo video sem";
     dropzone.classList.remove("has-file");
+    fileListEl.hidden = true;
+    fileListEl.innerHTML = "";
   }
 }
 
@@ -201,10 +213,10 @@ function updateFileLabel() {
 });
 
 dropzone.addEventListener("drop", (e) => {
-  const file = e.dataTransfer?.files?.[0];
-  if (!file) return;
+  const files = [...(e.dataTransfer?.files || [])];
+  if (!files.length) return;
   const dt = new DataTransfer();
-  dt.items.add(file);
+  files.forEach((f) => dt.items.add(f));
   mediaInput.files = dt.files;
   updateFileLabel();
 });
@@ -253,7 +265,7 @@ form.addEventListener("submit", async (e) => {
   }
 
   const fd = new FormData();
-  fd.append("file", mediaInput.files[0]);
+  [...mediaInput.files].forEach((f) => fd.append("file", f));
   if (phoneSelect.value) fd.append("phone", phoneSelect.value);
   if (locationSelect.value) fd.append("location", locationSelect.value);
   if (whenInput.value) {
@@ -283,7 +295,12 @@ form.addEventListener("submit", async (e) => {
   fd.append("lens_model", camLensModel.value);
 
   submitBtn.disabled = true;
-  setStatus(wipeCheck.checked ? "Mažem staré metadata a zapisujem nové…" : "Zapisujem metadata…");
+  const n = mediaInput.files.length;
+  setStatus(
+    wipeCheck.checked
+      ? `Mažem metadata a zapisujem nové (${n})…`
+      : `Zapisujem metadata (${n})…`
+  );
 
   try {
     const res = await fetch("/api/spoof", { method: "POST", body: fd });
@@ -291,7 +308,21 @@ form.addEventListener("submit", async (e) => {
     if (!res.ok) throw new Error(data.error || "Spoof zlyhal.");
 
     const s = data.summary;
-    const kindLabel = s.kind === "image" ? "foto" : "video";
+    const kindLabel =
+      s.kind === "image" ? "foto" : s.kind === "batch" ? `batch (${s.count})` : "video";
+    let itemsHtml = "";
+    if (data.items && data.items.length > 1) {
+      itemsHtml = `<ul class="batch-list">${data.items
+        .map(
+          (it) =>
+            `<li><span>${escapeHtml(it.original)}</span><strong>${escapeHtml(it.filename)}</strong></li>`
+        )
+        .join("")}</ul>`;
+    }
+    let errHtml = "";
+    if (data.errors && data.errors.length) {
+      errHtml = `<p class="status error">${data.errors.length} súbor(ov) zlyhalo</p>`;
+    }
     summaryEl.innerHTML = `
       <dt>súbor</dt><dd>${escapeHtml(s.original)} → <strong>${escapeHtml(s.filename || data.download_name || "—")}</strong></dd>
       <dt>typ</dt><dd>${escapeHtml(kindLabel)}</dd>
@@ -303,11 +334,27 @@ form.addEventListener("submit", async (e) => {
       <dt>wipe</dt><dd>${s.wipe ? "áno — staré tagy premazané" : "nie"}</dd>
     `;
     metaEl.textContent = formatMeta(data.metadata);
+    const resultHead = resultEl.querySelector(".result-head");
+    let listHost = resultEl.querySelector(".batch-host");
+    if (!listHost) {
+      listHost = document.createElement("div");
+      listHost.className = "batch-host";
+      resultHead.insertAdjacentElement("afterend", listHost);
+    }
+    listHost.innerHTML = itemsHtml + errHtml;
+
     downloadBtn.href = data.download_url;
     downloadBtn.setAttribute("download", data.download_name || "IMG_0001.JPG");
-    downloadBtn.textContent = `Stiahnuť ${data.download_name || "súbor"}`;
+    downloadBtn.textContent = data.batch
+      ? `Stiahnuť ZIP (${data.count})`
+      : `Stiahnuť ${data.download_name || "súbor"}`;
     resultEl.hidden = false;
-    setStatus("Hotovo — môžeš stiahnuť súbor.", "ok");
+    setStatus(
+      data.batch
+        ? `Hotovo — ${data.count} súborov v ZIP.`
+        : "Hotovo — môžeš stiahnuť súbor.",
+      "ok"
+    );
   } catch (err) {
     setStatus(err.message || "Chyba", "error");
   } finally {

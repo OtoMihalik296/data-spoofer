@@ -7,6 +7,8 @@ import os
 import secrets
 import shutil
 import time
+import zipfile
+from datetime import timedelta
 from pathlib import Path
 
 from flask import (
@@ -19,7 +21,7 @@ from flask import (
 )
 
 from presets import LOCATIONS, PHONES, list_locations, list_phones
-from geocode import reverse_geocode
+from geocode import resolve_place
 from cameras import camera_defaults, get_camera
 from spoof import MEDIA_EXTS, IMAGE_EXTS, parse_when, read_metadata, spoof_file
 
@@ -27,6 +29,7 @@ ROOT = Path(__file__).resolve().parent
 WORK = ROOT / ".work"
 UPLOADS = WORK / "uploads"
 OUTPUTS = WORK / "outputs"
+MAX_BATCH = int(os.environ.get("MAX_BATCH", "30"))
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
@@ -44,7 +47,7 @@ def _session_id() -> str:
     return session["sid"]
 
 
-def _apple_filename(suffix: str) -> str:
+def _apple_filename(suffix: str, used: set[str] | None = None) -> str:
     """iPhone Camera Roll style: IMG_4521.MOV / IMG_4521.HEIC / IMG_4521.JPG"""
     import random as _rnd
 
@@ -66,9 +69,17 @@ def _apple_filename(suffix: str) -> str:
     elif ext == ".m4v":
         out = ".M4V"
     else:
-        # mp4 and other video containers stay uppercase-ish Apple-like
         out = ext.upper() if ext else ".MOV"
-    return f"IMG_{_rnd.randint(1, 9999):04d}{out}"
+
+    used = used if used is not None else set()
+    for _ in range(50):
+        name = f"IMG_{_rnd.randint(1, 9999):04d}{out}"
+        if name not in used:
+            used.add(name)
+            return name
+    name = f"IMG_{secrets.token_hex(2).upper()}{out}"
+    used.add(name)
+    return name
 
 
 def _download_mimetype(name: str) -> str:
@@ -87,6 +98,7 @@ def _download_mimetype(name: str) -> str:
         ".tif": "image/tiff",
         ".tiff": "image/tiff",
         ".dng": "image/x-adobe-dng",
+        ".zip": "application/zip",
     }.get(ext, "application/octet-stream")
 
 
@@ -111,6 +123,15 @@ def _parse_float(raw: str | None, name: str) -> float | None:
         return float(str(raw).strip())
     except ValueError as exc:
         raise ValueError(f"Neplatné {name}: {raw!r}") from exc
+
+
+def _collect_uploads():
+    files = request.files.getlist("file")
+    if not files:
+        legacy = request.files.get("video")
+        if legacy:
+            files = [legacy]
+    return [f for f in files if f and f.filename]
 
 
 @app.get("/")
@@ -171,7 +192,7 @@ def api_reverse():
         return jsonify({"error": "Chýba lat/lon."}), 400
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return jsonify({"error": "GPS mimo rozsahu."}), 400
-    place = reverse_geocode(lat, lon)
+    place = resolve_place(lat, lon)
     return jsonify(place)
 
 
@@ -179,24 +200,11 @@ def api_reverse():
 def api_spoof():
     _cleanup_old()
 
-    if "file" not in request.files and "video" not in request.files:
-        return jsonify({"error": "Chýba súbor (foto alebo video)."}), 400
-
-    file = request.files.get("file") or request.files.get("video")
-    if not file or not file.filename:
-        return jsonify({"error": "Vyber foto alebo video."}), 400
-
-    original_name = Path(file.filename).name
-    suffix = Path(original_name).suffix.lower()
-    if suffix not in MEDIA_EXTS:
-        return jsonify(
-            {
-                "error": f"Nepodporovaný formát {suffix or '(bez prípony)'}. "
-                f"Použi: {', '.join(sorted(MEDIA_EXTS))}"
-            }
-        ), 400
-
-    kind = "image" if suffix in IMAGE_EXTS else "video"
+    uploads = _collect_uploads()
+    if not uploads:
+        return jsonify({"error": "Vyber aspoň jednu fotku alebo video."}), 400
+    if len(uploads) > MAX_BATCH:
+        return jsonify({"error": f"Maximum je {MAX_BATCH} súborov naraz."}), 400
 
     phone = (request.form.get("phone") or "").strip()
     location = (request.form.get("location") or "").strip() or None
@@ -254,8 +262,14 @@ def api_spoof():
     if not no_gps and lat is not None and lon is not None:
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             return jsonify({"error": "GPS mimo rozsahu (lat ±90, lon ±180)."}), 400
-        # Always resolve city/country from map coordinates
-        place = reverse_geocode(lat, lon)
+        place = resolve_place(
+            lat,
+            lon,
+            city=(request.form.get("city") or "").strip(),
+            country=(request.form.get("country") or "").strip(),
+            country_code=(request.form.get("country_code") or "").strip(),
+            location_key=location,
+        )
         location_override = {
             "lat": lat,
             "lon": lon,
@@ -267,37 +281,8 @@ def api_spoof():
             "exact": True,
         }
 
-    sid = _session_id()
-    job = f"{sid}_{int(time.time())}_{secrets.token_hex(4)}"
-    src = UPLOADS / f"{job}{suffix}"
-    out_dir = OUTPUTS / job
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    file.save(src)
-
-    try:
-        target = spoof_file(
-            src,
-            phone,
-            None if (no_gps or location_override) else location,
-            when,
-            inplace=False,
-            out_dir=out_dir,
-            no_gps=no_gps,
-            quiet=True,
-            location_override=None if no_gps else location_override,
-            wipe=wipe,
-            camera_override=camera_override,
-        )
-        meta = read_metadata(target)
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": str(exc)}), 500
-    finally:
-        src.unlink(missing_ok=True)
-
     phone_info = PHONES[phone]
     label = phone_info.get("display_name") or f"{phone_info['make']} {phone_info['model']}"
-
     if no_gps:
         loc_name = "(bez GPS)"
     elif location_override:
@@ -310,21 +295,119 @@ def api_spoof():
     else:
         loc_name = "(bez GPS)"
 
-    download_name = _apple_filename(suffix)
-    # Rename on disk so the file itself looks like Camera Roll output
-    apple_path = target.with_name(download_name)
-    if apple_path != target:
-        target.replace(apple_path)
-        target = apple_path
+    sid = _session_id()
+    job = f"{sid}_{int(time.time())}_{secrets.token_hex(4)}"
+    out_dir = OUTPUTS / job
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    used_names: set[str] = set()
+    items = []
+    errors = []
+    last_meta = {}
+
+    for index, file in enumerate(uploads):
+        original_name = Path(file.filename).name
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in MEDIA_EXTS:
+            errors.append(
+                {
+                    "original": original_name,
+                    "error": f"Nepodporovaný formát {suffix or '(bez prípony)'}",
+                }
+            )
+            continue
+
+        kind = "image" if suffix in IMAGE_EXTS else "video"
+        # Slightly different capture time per file (looks more natural in batch)
+        file_when = when + timedelta(seconds=index)
+        src = UPLOADS / f"{job}_{index}{suffix}"
+        file.save(src)
+
+        try:
+            # Per-file mild camera jitter when batching (ISO/shutter) unless user locked values
+            cam_for_file = camera_override
+            if camera_override and len(uploads) > 1:
+                import random as _rnd
+                from copy import deepcopy
+
+                cam_for_file = deepcopy(camera_override)
+                try:
+                    base_iso = int(float(cam_for_file.get("iso") or 100))
+                    cam_for_file["iso"] = str(
+                        max(25, base_iso + _rnd.choice([-50, -25, 0, 25, 50, 100]))
+                    )
+                    den = int(float(cam_for_file.get("exposure_den") or 125))
+                    cam_for_file["exposure_den"] = str(
+                        max(30, den + _rnd.choice([-40, -20, 0, 20, 40, 80]))
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+            target = spoof_file(
+                src,
+                phone,
+                None if (no_gps or location_override) else location,
+                file_when,
+                inplace=False,
+                out_dir=out_dir,
+                no_gps=no_gps,
+                quiet=True,
+                location_override=None if no_gps else location_override,
+                wipe=wipe,
+                camera_override=cam_for_file,
+            )
+            meta = read_metadata(target)
+            download_name = _apple_filename(suffix, used_names)
+            apple_path = target.with_name(download_name)
+            if apple_path != target:
+                target.replace(apple_path)
+                target = apple_path
+
+            items.append(
+                {
+                    "original": original_name,
+                    "filename": download_name,
+                    "kind": kind,
+                    "when": file_when.strftime("%Y-%m-%d %H:%M:%S"),
+                    "path": str(target),
+                }
+            )
+            last_meta = meta
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"original": original_name, "error": str(exc)})
+        finally:
+            src.unlink(missing_ok=True)
+
+    if not items:
+        return jsonify(
+            {
+                "error": "Žiaden súbor sa nepodarilo spoofnúť.",
+                "errors": errors,
+            }
+        ), 500
+
+    if len(items) == 1:
+        download_name = items[0]["filename"]
+        download_path = Path(items[0]["path"])
+        batch = False
+    else:
+        download_name = f"IMG_batch_{when.strftime('%Y%m%d_%H%M%S')}.zip"
+        download_path = out_dir / download_name
+        with zipfile.ZipFile(download_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for item in items:
+                zf.write(item["path"], arcname=item["filename"])
+        batch = True
 
     session["last_job"] = {
-        "path": str(target),
+        "path": str(download_path),
         "download_name": download_name,
     }
 
     return jsonify(
         {
             "ok": True,
+            "batch": batch,
+            "count": len(items),
             "download_url": "/api/download",
             "download_name": download_name,
             "summary": {
@@ -334,12 +417,25 @@ def api_spoof():
                 "country": location_override["country"] if location_override else None,
                 "country_code": location_override["country_code"] if location_override else None,
                 "when": when.strftime("%Y-%m-%d %H:%M:%S"),
-                "original": original_name,
+                "original": items[0]["original"]
+                if len(items) == 1
+                else f"{len(items)} súborov",
                 "filename": download_name,
-                "kind": kind,
+                "kind": items[0]["kind"] if len(items) == 1 else "batch",
                 "wipe": wipe,
+                "count": len(items),
             },
-            "metadata": meta,
+            "items": [
+                {
+                    "original": i["original"],
+                    "filename": i["filename"],
+                    "kind": i["kind"],
+                    "when": i["when"],
+                }
+                for i in items
+            ],
+            "errors": errors,
+            "metadata": last_meta,
         }
     )
 

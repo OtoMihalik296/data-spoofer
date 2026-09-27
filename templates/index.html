@@ -20,10 +20,11 @@
     <main class="stage">
       <form id="spoof-form" class="panel" novalidate>
         <label class="drop" id="dropzone" for="media">
-          <input type="file" id="media" name="file" accept=".mp4,.mov,.m4v,.3gp,.jpg,.jpeg,.heic,.heif,.png,.webp,.tif,.tiff,.dng,video/*,image/*" required />
-          <span class="drop-title" id="drop-title">Presuň foto alebo video sem</span>
-          <span class="drop-hint">JPG / HEIC / PNG · MP4 / MOV · max 200&nbsp;MB</span>
+          <input type="file" id="media" name="file" accept=".mp4,.mov,.m4v,.3gp,.jpg,.jpeg,.heic,.heif,.png,.webp,.tif,.tiff,.dng,video/*,image/*" multiple required />
+          <span class="drop-title" id="drop-title">Presuň fotky alebo video sem</span>
+          <span class="drop-hint">viac súborov naraz · JPG / HEIC / PNG · MP4 / MOV · max 200&nbsp;MB</span>
         </label>
+        <ul class="file-list" id="file-list" hidden></ul>
 
         <div class="grid">
           <label class="field">
@@ -138,7 +139,7 @@
       <aside class="result" id="result" hidden>
         <div class="result-head">
           <h2>Hotovo</h2>
-          <a class="btn secondary" id="download-btn" href="/api/download">Stiahnuť video</a>
+          <a class="btn secondary" id="download-btn" href="/api/download">Stiahnuť</a>
         </div>
         <dl class="summary" id="summary"></dl>
         <div class="meta-wrap">

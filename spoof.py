@@ -155,11 +155,19 @@ def write_photo_exif(
                 f"-GPS:GPSTimeStamp={when.strftime('%H:%M:%S')}",
                 "-GPS:GPSProcessingMethod=GPS",
                 f"-XMP-iptcCore:Location={city}",
+                f"-XMP-photoshop:City={city}",
                 f"-XMP-photoshop:Country={country}",
+                f"-IPTC:City={city}",
+                f"-IPTC:Country-PrimaryLocationName={country}",
+                f"-Location={city}",
+                f"-LocationName={city}, {country}",
+                f"-Country={country}",
             ]
         )
         if country_code:
             detail.append(f"-XMP-iptcCore:CountryCode={country_code}")
+            detail.append(f"-IPTC:Country-PrimaryLocationCode={country_code}")
+            detail.append(f"-CountryCode={country_code}")
 
     run_exiftool([*detail, "-m", str(path)])
 
@@ -453,10 +461,17 @@ def build_tags(
                 f"-Location={city}",
                 f"-LocationName={city}, {country}",
                 f"-Country={country}",
+                f"-XMP-iptcCore:Location={city}",
+                f"-XMP-photoshop:City={city}",
+                f"-XMP-photoshop:Country={country}",
+                f"-IPTC:City={city}",
+                f"-IPTC:Country-PrimaryLocationName={country}",
             ]
         )
         if country_code:
             tags.append(f"-CountryCode={country_code}")
+            tags.append(f"-XMP-iptcCore:CountryCode={country_code}")
+            tags.append(f"-IPTC:Country-PrimaryLocationCode={country_code}")
         if not photo:
             tags.extend(
                 [
