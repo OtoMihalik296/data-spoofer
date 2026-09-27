@@ -58,6 +58,17 @@ function fillSelect(select, items, placeholder) {
   }
 }
 
+function parseCoord(raw) {
+  if (raw == null || raw === "") return NaN;
+  let text = String(raw).trim().replace(/\s|\u00a0/g, "");
+  if (text.includes(",") && text.includes(".")) {
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (text.includes(",")) {
+    text = text.replace(",", ".");
+  }
+  return Number(text);
+}
+
 function lookupPlace(lat, lon) {
   clearTimeout(reverseTimer);
   reverseTimer = setTimeout(async () => {
@@ -65,12 +76,15 @@ function lookupPlace(lat, lon) {
     try {
       const url = `/api/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
       const res = await fetch(url);
-      if (!res.ok) throw new Error("reverse failed");
       const data = await res.json();
-      cityInput.value = data.city || "Unknown";
-      countryInput.value = data.country || "Unknown";
+      if (!res.ok) throw new Error(data.error || "reverse failed");
+      const city = data.city && data.city !== "Unknown" ? data.city : "";
+      const country = data.country && data.country !== "Unknown" ? data.country : "";
+      if (!city || !country) throw new Error("empty place");
+      cityInput.value = city;
+      countryInput.value = country;
       countryCodeInput.value = data.country_code || "";
-      placeLabel.textContent = `${data.city}, ${data.country}`;
+      placeLabel.textContent = `${city}, ${country}`;
     } catch {
       placeLabel.textContent = `${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}`;
     }
@@ -97,11 +111,16 @@ function syncGpsUi() {
 }
 
 function setCoords(lat, lon, alt, { fly = true, reverse = true } = {}) {
-  latInput.value = Number(lat).toFixed(6);
-  lonInput.value = Number(lon).toFixed(6);
-  if (alt != null && alt !== "") altInput.value = Number(alt).toFixed(1);
+  const la = parseCoord(lat);
+  const lo = parseCoord(lon);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
 
-  const ll = [Number(lat), Number(lon)];
+  latInput.value = la.toFixed(6);
+  lonInput.value = lo.toFixed(6);
+  const altN = parseCoord(alt);
+  if (Number.isFinite(altN)) altInput.value = altN.toFixed(1);
+
+  const ll = [la, lo];
   if (marker) marker.setLatLng(ll);
   if (fly && map) map.flyTo(ll, Math.max(map.getZoom(), 13), { duration: 0.55 });
   if (reverse) lookupPlace(ll[0], ll[1]);
@@ -236,8 +255,8 @@ locationSelect.addEventListener("change", () => {
 });
 
 function applyManualCoords() {
-  const lat = parseFloat(latInput.value);
-  const lon = parseFloat(lonInput.value);
+  const lat = parseCoord(latInput.value);
+  const lon = parseCoord(lonInput.value);
   if (Number.isFinite(lat) && Number.isFinite(lon)) {
     setCoords(lat, lon, altInput.value, { fly: true, reverse: true });
   }
@@ -245,6 +264,10 @@ function applyManualCoords() {
 
 latInput.addEventListener("change", applyManualCoords);
 lonInput.addEventListener("change", applyManualCoords);
+altInput.addEventListener("change", () => {
+  const a = parseCoord(altInput.value);
+  if (Number.isFinite(a)) altInput.value = a.toFixed(1);
+});
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -276,9 +299,16 @@ form.addEventListener("submit", async (e) => {
   fd.append("wipe", wipeCheck.checked ? "1" : "0");
 
   if (!noGpsCheck.checked) {
-    fd.append("lat", latInput.value);
-    fd.append("lon", lonInput.value);
-    fd.append("alt", altInput.value || "0");
+    const la = parseCoord(latInput.value);
+    const lo = parseCoord(lonInput.value);
+    const al = parseCoord(altInput.value);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) {
+      setStatus("Neplatné GPS súradnice (použi bodku alebo čiarku).", "error");
+      return;
+    }
+    fd.append("lat", String(la));
+    fd.append("lon", String(lo));
+    fd.append("alt", Number.isFinite(al) ? String(al) : "0");
     fd.append("city", cityInput.value || "");
     fd.append("country", countryInput.value || "");
     fd.append("country_code", countryCodeInput.value || "");

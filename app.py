@@ -119,8 +119,15 @@ def _cleanup_old(max_age_sec: int = 3600) -> None:
 def _parse_float(raw: str | None, name: str) -> float | None:
     if raw is None or str(raw).strip() == "":
         return None
+    text = str(raw).strip().replace(" ", "").replace("\u00a0", "")
+    # European decimal comma: 43,663960 or -79,538269
+    if "," in text and "." in text:
+        # 1.234,56 → 1234.56
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
     try:
-        return float(str(raw).strip())
+        return float(text)
     except ValueError as exc:
         raise ValueError(f"Neplatné {name}: {raw!r}") from exc
 
